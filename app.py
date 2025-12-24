@@ -2,7 +2,86 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import os
+import json
+from contextlib import contextmanager
 
+# -----------------------------
+# Access counter (persistent)
+# -----------------------------
+COUNTER_FILE = os.path.join(os.path.dirname(__file__), "access_counter.json")
+
+@contextmanager
+def file_lock(fp):
+    """
+    Best-effort cross-platform file lock.
+    - On Linux/macOS: fcntl.flock
+    - On Windows: msvcrt.locking
+    If locking isn't available, proceed without lock.
+    """
+    try:
+        import fcntl  # type: ignore
+        fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        try:
+            import msvcrt  # type: ignore
+            msvcrt.locking(fp.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                try:
+                    fp.seek(0)
+                    msvcrt.locking(fp.fileno(), msvcrt.LK_UNLCK, 1)
+                except Exception:
+                    pass
+        except Exception:
+            yield
+
+def read_counter() -> int:
+    if not os.path.exists(COUNTER_FILE):
+        return 0
+    try:
+        with open(COUNTER_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return int(data.get("total", 0))
+    except Exception:
+        return 0
+
+def increment_counter_once_per_session() -> int:
+    """
+    Increment total access count only once per Streamlit session.
+    Returns the (possibly updated) total count.
+    """
+    if st.session_state.get("_counted", False):
+        return read_counter()
+
+    total = 0
+    try:
+        with open(COUNTER_FILE, "a+", encoding="utf-8") as f:
+            with file_lock(f):
+                f.seek(0)
+                try:
+                    data = json.load(f)
+                    total = int(data.get("total", 0))
+                except Exception:
+                    total = 0
+                total += 1
+                f.seek(0)
+                f.truncate()
+                json.dump({"total": total}, f, ensure_ascii=False)
+    except Exception:
+        total = read_counter()
+
+    st.session_state["_counted"] = True
+    return total
+
+# -----------------------------
+# Finance model helpers
+# -----------------------------
 def npv(rate, cashflows):
     return sum(cf / ((1.0 + rate) ** t) for t, cf in enumerate(cashflows))
 
@@ -34,22 +113,21 @@ def calc_payback_year(years, cumulative):
     return None
 
 def award_rate(t, X, alpha0, Y):
-    """
-    Award rate alpha_t:
-      - for t <= X: alpha0
-      - for t > X:  alpha0 * (1 - Y)^(t - X)
-    where t is year index starting at 1,
-          X is years at initial award rate,
-          alpha0 in [0,1] is initial award rate,
-          Y in [0,1] is YoY decline rate.
-    """
     if t <= X:
         return alpha0
     return alpha0 * ((1.0 - Y) ** (t - X))
 
 def main():
     st.set_page_config(page_title="需給調整市場：最小IRR/NPV計算", layout="wide")
-    st.title("需給調整市場：最小IRR/NPV計算（落札率α0＋低下Y＋β＋γ＋手数料＋O&M＋廃止費用）")
+
+    total_access = increment_counter_once_per_session()
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.title("需給調整市場：最小IRR/NPV計算（落札率α0＋低下Y＋β＋γ＋手数料＋O&M＋廃止費用）")
+    with col2:
+        st.markdown("#### Access")
+        st.metric("Total", f"{total_access:,}")
 
     with st.sidebar:
         st.header("入力")
@@ -69,7 +147,7 @@ def main():
         gamma = gamma_percent / 100.0
 
         st.divider()
-        st.subheader("落札率モデル（修正版）")
+        st.subheader("落札率モデル")
         alpha0_percent = st.number_input("最初のX年は落札率 α%（α）", min_value=0.0, max_value=100.0, value=100.0, step=1.0)
         X = int(st.number_input("最初のX年（年）", min_value=0, value=3, step=1))
         Y_percent = st.number_input("X年以降、前年比でY%ずつ低下 (Y%)", min_value=0.0, max_value=100.0, value=10.0, step=0.5)
@@ -84,13 +162,12 @@ def main():
 
     capex = unit_cost * energy_kwh
 
-    # Apply beta to kW and gamma to annual participation days
     effective_power_kw = power_kw * beta
     effective_days = days_per_year * gamma
 
     base_gross_revenue = price * slots_per_day * effective_days * effective_power_kw
 
-    om_year = om_cost_per_kw_year * power_kw  # per requirement: based on nameplate output
+    om_year = om_cost_per_kw_year * power_kw
     decommission_cost = capex * decommission_rate / 100.0
 
     years_list = [0]
@@ -161,10 +238,8 @@ def main():
         else:
             st.metric("IRR", f"{irr:.2%}")
 
-        st.caption("※落札率は「最初X年=α%、以降は前年比Y%低下」。βは出力、γは参加日数に乗算。")
-
     with right:
-        st.subheader("年次キャッシュフロー（落札率＋β＋γ込み）")
+        st.subheader("年次キャッシュフロー")
         st.dataframe(df, use_container_width=True)
 
     st.subheader("キャッシュフロー（年次）と累積キャッシュフロー")
