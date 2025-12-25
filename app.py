@@ -2,7 +2,7 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import json, os
+import json
 from contextlib import contextmanager
 
 # -----------------------------
@@ -74,8 +74,16 @@ def calc_payback_year(cum):
             return (i-1) + frac
     return None
 
-def award_rate(t, X, alpha0, Y):
-    return alpha0 if t <= X else alpha0 * ((1-Y)**(t-X))
+# -----------------------------
+# Scenario models
+# -----------------------------
+def award_rate_decline(t: int, X: int, alpha0: float, Y: float) -> float:
+    """Model A: award rate alpha declines after X years."""
+    return alpha0 if t <= X else alpha0 * ((1 - Y) ** (t - X))
+
+def price_decline(t: int, X: int, price1: float, Y: float) -> float:
+    """Model B: price declines after X years."""
+    return price1 if t <= X else price1 * ((1 - Y) ** (t - X))
 
 # -----------------------------
 # Main app
@@ -84,13 +92,20 @@ def main():
     st.set_page_config(page_title="需給調整市場IRR/NPV", layout="wide")
     increment_counter_once()
 
-    st.title("需給調整市場：IRR / NPV 計算アプリ（v14）")
+    st.title("需給調整市場：IRR / NPV 計算アプリ（v15）")
     st.caption(f"Access count: {read_counter()}")
 
-    # =============================
-    # Sidebar inputs
-    # =============================
     with st.sidebar:
+        st.header("収入モデルの選択")
+        revenue_model = st.radio(
+            "落札率/単価の扱い",
+            [
+                "モデルA：落札率が年次で低下（単価は一定）",
+                "モデルB：落札率は一定（単価が年次で低下）",
+            ],
+        )
+
+        st.divider()
         st.header("CAPEX入力方式")
         capex_mode = st.radio(
             "CAPEXの算定方法",
@@ -99,88 +114,117 @@ def main():
 
         st.divider()
         st.header("市場・運用条件")
-        price = st.number_input("単価 (円/(kW・コマ))", value=5.0)
-        slots = st.number_input("コマ数/日", value=48)
-        days = st.number_input("参加日数/年", value=353)
-        power = st.number_input("出力 (kW)", value=2000.0)
-        years = int(st.number_input("評価年数 (年)", value=15))
+        price = st.number_input("単価 (円/(kW・コマ)) ※モデルBでは初年度単価α1", value=5.0, min_value=0.0)
+        slots = st.number_input("コマ数/日", value=48, min_value=0)
+        days = st.number_input("参加日数/年", value=353, min_value=0)
+        power = st.number_input("出力 (kW)", value=2000.0, min_value=0.0)
+        years = int(st.number_input("評価年数 (年)", value=15, min_value=1))
 
-        beta = st.number_input("β 約定量係数", value=1.0)
-        gamma = st.number_input("γ 稼働率係数", value=1.0)
+        beta = st.number_input("β 約定量係数", value=1.0, min_value=0.0)
+        gamma = st.number_input("γ 稼働率係数", value=1.0, min_value=0.0)
 
         st.divider()
-        st.header("落札率モデル")
-        alpha0 = st.number_input("初期落札率 α", value=1.0)
-        X = int(st.number_input("α維持年数 X", value=3))
-        Y = st.number_input("低下率 Y", value=0.1)
+        st.header("年次低下のパラメータ")
+        X = int(st.number_input("X：維持年数 (年)", value=3, min_value=0))
+        Y = st.number_input("Y：X年以降の低下率（前年比）", value=0.1, min_value=0.0, max_value=1.0)
+
+        if revenue_model.startswith("モデルA"):
+            alpha0 = st.number_input("初期落札率 α（0〜1）", value=1.0, min_value=0.0, max_value=1.0)
+            fixed_award = None
+        else:
+            fixed_award = st.number_input("落札率（一定, 0〜1）", value=1.0, min_value=0.0, max_value=1.0)
+            alpha0 = None
 
         st.divider()
         st.header("コスト・評価条件")
-        fee = st.number_input("RA+AC 手数料率", value=0.1)
-        om_kw = st.number_input("O&M費 (円/kW/年)", value=3000.0)
-        decom = st.number_input("廃止費率 (CAPEX比)", value=0.05)
-        r = st.number_input("割引率 r", value=0.05)
+        fee = st.number_input("RA+AC 手数料率（0〜1）", value=0.1, min_value=0.0, max_value=1.0)
+        om_kw = st.number_input("O&M費 (円/kW/年)", value=3000.0, min_value=0.0)
+        decom = st.number_input("廃止費率 (CAPEX比, 0〜1)", value=0.05, min_value=0.0, max_value=1.0)
+        r = st.number_input("割引率 r", value=0.05, min_value=0.0)
 
         st.divider()
         st.header("CAPEX入力")
         if capex_mode.startswith("単価方式"):
-            unit_cost = st.number_input("システム単価 (円/kWh)", value=60000.0)
-            energy = st.number_input("ESS容量 (kWh)", value=7000.0)
+            unit_cost = st.number_input("システム単価 (円/kWh)", value=60000.0, min_value=0.0)
+            energy = st.number_input("ESS容量 (kWh)", value=7000.0, min_value=0.0)
             capex = unit_cost * energy
             capex_note = "単価方式（円/kWh × 容量）"
         else:
-            equipment_cost = st.number_input("機器費 (円)", value=300_000_000.0, step=1_000_000.0)
-            construction_cost = st.number_input("工事費 (円)", value=100_000_000.0, step=1_000_000.0)
+            equipment_cost = st.number_input("機器費 (円)", value=300_000_000.0, step=1_000_000.0, min_value=0.0)
+            construction_cost = st.number_input("工事費 (円)", value=100_000_000.0, step=1_000_000.0, min_value=0.0)
             capex = equipment_cost + construction_cost
             capex_note = "積算方式（機器費＋工事費）"
 
-    # =============================
-    # Derived inputs (V12 feature)
-    # =============================
+    # Derived inputs (V12 feature preserved)
     effective_power = power * beta
     effective_days = days * gamma
-    base_revenue = price * slots * effective_days * effective_power
     om_year = om_kw * power
     decom_cost = capex * decom
+
+    # Multiplier for price and award
+    base_revenue_coeff = slots * effective_days * effective_power
 
     derived_df = pd.DataFrame({
         "項目": [
             "CAPEX",
             "CAPEX算定方式",
-            "有効出力",
-            "有効参加日数",
-            "ベース年間総収入",
-            "年間O&M費",
-            "廃止措置費用"
+            "有効出力（出力×β）",
+            "有効参加日数（日数×γ）",
+            "年間O&M費（O&M×出力）",
+            "廃止措置費用（最終年, CAPEX×率）",
+            "収入モデル",
         ],
         "値": [
             f"{capex:,.0f}",
             capex_note,
             f"{effective_power:,.2f}",
             f"{effective_days:,.2f}",
-            f"{base_revenue:,.0f}",
             f"{om_year:,.0f}",
-            f"{decom_cost:,.0f}"
+            f"{decom_cost:,.0f}",
+            revenue_model,
         ],
-        "単位": [
-            "円", "-", "kW", "日/年", "円/年", "円/年", "円"
-        ]
+        "単位": ["円", "-", "kW", "日/年", "円/年", "円", "-"]
     })
 
     st.subheader("📌 計算により導出された入力値一覧")
     st.dataframe(derived_df, use_container_width=True)
 
-    # =============================
-    # Cashflow
-    # =============================
+    # Cashflow & annual table
+    years_list = [0]
+    award_list = [np.nan]
+    price_list = [np.nan]
+    gross_list = [0.0]
+    fee_list = [0.0]
+    om_list = [0.0]
+    decom_list = [0.0]
     cf = [-capex]
     cum = [-capex]
 
-    for t in range(1, years+1):
-        revenue = base_revenue * award_rate(t, X, alpha0, Y)
-        net = revenue * (1-fee) - om_year
+    for t in range(1, years + 1):
+        if revenue_model.startswith("モデルA"):
+            a_t = award_rate_decline(t, X, alpha0, Y)
+            p_t = price
+        else:
+            a_t = fixed_award
+            p_t = price_decline(t, X, price, Y)
+
+        gross = p_t * base_revenue_coeff * a_t
+        fee_y = gross * fee
+        net = gross - fee_y - om_year
+
+        decom_y = 0.0
         if t == years:
-            net -= decom_cost
+            decom_y = decom_cost
+            net -= decom_y
+
+        years_list.append(t)
+        award_list.append(a_t)
+        price_list.append(p_t)
+        gross_list.append(gross)
+        fee_list.append(fee_y)
+        om_list.append(om_year)
+        decom_list.append(decom_y)
+
         cf.append(net)
         cum.append(cum[-1] + net)
 
@@ -188,25 +232,52 @@ def main():
     npv_val = npv(r, cf)
     payback = calc_payback_year(cum)
 
-    # =============================
-    # Results
-    # =============================
     st.subheader("📊 結果指標")
-    st.metric("CAPEX", f"{capex:,.0f} 円")
-    st.metric("NPV", f"{npv_val:,.0f} 円")
-    st.metric("IRR", f"{irr:.2%}" if irr else "計算不可")
-    if payback:
-        st.metric("回収年", f"{payback:.2f} 年")
-    else:
-        st.warning("評価期間内に回収不可")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("CAPEX", f"{capex:,.0f} 円")
+    c2.metric("NPV", f"{npv_val:,.0f} 円")
+    c3.metric("IRR", f"{irr:.2%}" if irr is not None else "計算不可")
+    c4.metric("回収年", f"{payback:.2f} 年" if payback is not None else "回収不可")
 
-    st.subheader("年次キャッシュフローと累積キャッシュフロー")
     df_cf = pd.DataFrame({
-        "Year": list(range(0, years+1)),
+        "Year": years_list,
+        "UnitPrice": price_list,
+        "AwardRate": award_list,
+        "GrossRevenue": gross_list,
+        "Fee": fee_list,
+        "OM": om_list,
+        "Decommission": decom_list,
         "CashFlow": cf,
-        "Cumulative": cum
+        "CumulativeCashFlow": cum,
     })
+
+    st.subheader("年次キャッシュフロー（年次）と累積キャッシュフロー")
     st.dataframe(df_cf, use_container_width=True)
+
+    # Combined chart: annual CF (bar) + cumulative CF (line)
+    import matplotlib.pyplot as plt
+    fig, ax1 = plt.subplots()
+    ax1.bar(df_cf["Year"], df_cf["CashFlow"])
+    ax1.set_xlabel("Year")
+    ax1.set_ylabel("Cash Flow (JPY)")
+    ax2 = ax1.twinx()
+    ax2.plot(df_cf["Year"], df_cf["CumulativeCashFlow"])
+    ax2.set_ylabel("Cumulative Cash Flow (JPY)")
+    st.pyplot(fig)
+
+    st.subheader("参考：単価と落札率の推移")
+    fig2, axp = plt.subplots()
+    axp.plot(df_cf["Year"], df_cf["UnitPrice"])
+    axp.set_xlabel("Year")
+    axp.set_ylabel("Unit Price")
+    st.pyplot(fig2)
+
+    fig3, axa = plt.subplots()
+    axa.plot(df_cf["Year"], df_cf["AwardRate"])
+    axa.set_xlabel("Year")
+    axa.set_ylabel("Award Rate")
+    axa.set_ylim(0, 1.05)
+    st.pyplot(fig3)
 
 if __name__ == "__main__":
     main()
