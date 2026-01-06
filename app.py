@@ -290,6 +290,9 @@ def main():
         "CashFlow": cf,
         "CumulativeCashFlow": cum,
     })
+    df_cf["CapacityRevenue"] = df_cf["CapacityPrice"] * power
+    df_cf["CapacityRevenue"] = df_cf["CapacityRevenue"].fillna(0.0)
+    df_cf["GrossRevenue"] = df_cf["RAGrossRevenue"] + df_cf["CapacityRevenue"]
 
     st.subheader("年次キャッシュフロー（年次）と累積キャッシュフロー")
     st.dataframe(df_cf, use_container_width=True)
