@@ -86,6 +86,11 @@ def price_decline(t: int, X: int, price1: float, Y: float) -> float:
     """Model B: price declines after X years."""
     return price1 if t <= X else price1 * ((1 - Y) ** (t - X))
 
+
+def cap_price_decline(t: int, cap_price0: float, Z: float) -> float:
+    """Capacity market price declines by Z each year (compound). t=1 is the first year."""
+    return cap_price0 * ((1 - Z) ** (t - 1))
+
 # -----------------------------
 # Main app
 # -----------------------------
@@ -120,6 +125,13 @@ def main():
         days = st.number_input("参加日数/年", value=353, min_value=0)
         power = st.number_input("出力 (kW)", value=2000.0, min_value=0.0)
         years = int(st.number_input("評価年数 (年)", value=15, min_value=1))
+
+        st.divider()
+        st.header("容量市場（収入）")
+        cap_price0 = st.number_input("容量市場単価（初年度）(円/kW)", value=0.0, min_value=0.0)
+        Z_pct = st.number_input("容量市場単価の低下率 Z（％/年）", value=0.0, min_value=0.0, max_value=100.0)
+        Z = Z_pct / 100.0
+
 
         st.divider()
         st.header("係数・率（％入力）")
@@ -209,6 +221,9 @@ def main():
     award_list = [np.nan]
     price_list = [np.nan]
     gross_list = [0.0]
+    cap_price_list = [np.nan]
+    cap_rev_list = [0.0]
+    ra_gross_list = [0.0]
     fee_list = [0.0]
     om_list = [0.0]
     decom_list = [0.0]
@@ -223,7 +238,11 @@ def main():
             a_t = fixed_award
             p_t = price_decline(t, X, price, Y)
 
-        gross = p_t * base_revenue_coeff * a_t
+        ra_gross = p_t * base_revenue_coeff * a_t
+        cap_p_t = cap_price_decline(t, cap_price0, Z)
+        cap_gross = cap_p_t * power
+
+        gross = ra_gross + cap_gross  # 案A：容量市場収入も手数料対象
         fee_y = gross * fee
         net = gross - fee_y - om_year
 
@@ -236,6 +255,9 @@ def main():
         award_list.append(a_t)
         price_list.append(p_t)
         gross_list.append(gross)
+        ra_gross_list.append(ra_gross)
+        cap_price_list.append(cap_p_t)
+        cap_rev_list.append(cap_gross)
         fee_list.append(fee_y)
         om_list.append(om_year)
         decom_list.append(decom_y)
@@ -259,6 +281,9 @@ def main():
         "UnitPrice": price_list,
         "AwardRate": award_list,
         "GrossRevenue": gross_list,
+        "RAGrossRevenue": ra_gross_list,
+        "CapacityPrice": cap_price_list,
+        "CapacityRevenue": cap_rev_list,
         "Fee": fee_list,
         "OM": om_list,
         "Decommission": decom_list,
@@ -281,9 +306,10 @@ def main():
     st.pyplot(fig)
 
     # Optional: trajectories
-    st.subheader("参考：単価と落札率の推移")
+    st.subheader("参考：単価（需給調整/容量市場）と落札率の推移")
     fig2, axp = plt.subplots()
     axp.plot(df_cf["Year"], df_cf["UnitPrice"])
+    axp.plot(df_cf["Year"], df_cf["CapacityPrice"])
     axp.set_xlabel("Year")
     axp.set_ylabel("Unit Price")
     st.pyplot(fig2)
