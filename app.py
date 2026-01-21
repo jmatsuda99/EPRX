@@ -176,14 +176,12 @@ def main():
             capex_base = equipment_cost + construction_cost
             capex_note_base = "積算方式（機器費＋工事費）"
 
-        
-    st.subheader("CAPEX（初期投資・税込）")
-    tax_rate_percent = st.number_input("消費税率（％）", min_value=0.0, max_value=100.0, value=10.0, step=0.5)
-    tax_rate = tax_rate_percent / 100.0
+        st.subheader("CAPEX（初期投資・税込）")
+        tax_rate_percent = st.number_input("消費税率（％）", min_value=0.0, max_value=100.0, value=10.0, step=0.5)
+        tax_rate = tax_rate_percent / 100.0
 
-    grid_connection_fee = st.number_input("連係工事負担金（0年度のみ、CAPEXに加算）（円）", value=0.0, step=1_000_000.0, min_value=0.0)
-        capex = capex_base + grid_connection_fee
-        capex_note = f"{capex_note_base} + 連係工事負担金"
+        grid_connection_fee = st.number_input("連係工事負担金（0年度のみ、CAPEXに加算）（円）", value=0.0, step=1_000_000.0, min_value=0.0)
+
 
     # -----------------------------
     # Derived inputs (V12 feature preserved)
@@ -191,6 +189,14 @@ def main():
     effective_power = power * beta
     effective_days = days * gamma
     om_year = om_kw * power
+
+    # -----------------------------
+    # CAPEX（税込）: (CAPEX税抜 + 連係工事負担金) × (1 + 消費税率)
+    # -----------------------------
+    capex_ex_tax = capex_base + grid_connection_fee
+    capex = capex_ex_tax * (1 + tax_rate)
+    capex_note = f"{capex_note_base} + 連係工事負担金（税抜） / 税込（消費税率{tax_rate_percent:.1f}%）"
+
     decom_cost = capex * decom
 
     base_revenue_coeff = slots * effective_days * effective_power  # multiplier for price & award
@@ -340,8 +346,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    # CAPEX（税抜→税込）
-    capex_ex_tax = capex_equipment + capex_construction + grid_connection_fee
-    capex = capex_ex_tax * (1 + tax_rate)
-
