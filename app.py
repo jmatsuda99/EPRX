@@ -168,13 +168,22 @@ def main():
         if capex_mode.startswith("単価方式"):
             unit_cost = st.number_input("システム単価 (円/kWh)", value=60000.0, min_value=0.0)
             energy = st.number_input("ESS容量 (kWh)", value=7000.0, min_value=0.0)
-            capex = unit_cost * energy
-            capex_note = "単価方式（円/kWh × 容量）"
+            capex_base = unit_cost * energy
+            capex_note_base = "単価方式（円/kWh × 容量）"
         else:
             equipment_cost = st.number_input("機器費 (円)", value=300_000_000.0, step=1_000_000.0, min_value=0.0)
             construction_cost = st.number_input("工事費 (円)", value=100_000_000.0, step=1_000_000.0, min_value=0.0)
-            capex = equipment_cost + construction_cost
-            capex_note = "積算方式（機器費＋工事費）"
+            capex_base = equipment_cost + construction_cost
+            capex_note_base = "積算方式（機器費＋工事費）"
+
+        
+    st.subheader("CAPEX（初期投資・税込）")
+    tax_rate_percent = st.number_input("消費税率（％）", min_value=0.0, max_value=100.0, value=10.0, step=0.5)
+    tax_rate = tax_rate_percent / 100.0
+
+    grid_connection_fee = st.number_input("連係工事負担金（0年度のみ、CAPEXに加算）（円）", value=0.0, step=1_000_000.0, min_value=0.0)
+        capex = capex_base + grid_connection_fee
+        capex_note = f"{capex_note_base} + 連係工事負担金"
 
     # -----------------------------
     # Derived inputs (V12 feature preserved)
@@ -191,6 +200,7 @@ def main():
         "項目": [
             "CAPEX",
             "CAPEX算定方式",
+            "連係工事負担金（0年度のみ）",
             "有効出力（出力×β）",
             "有効参加日数（日数×γ）",
             "ベース年間総収入（単価×…、モデルAの基準）",
@@ -201,6 +211,7 @@ def main():
         "値": [
             f"{capex:,.0f}",
             capex_note,
+            f"{grid_connection_fee:,.0f}",
             f"{effective_power:,.2f}",
             f"{effective_days:,.2f}",
             f"{base_revenue_at_price:,.0f}",
@@ -208,7 +219,7 @@ def main():
             f"{decom_cost:,.0f}",
             revenue_model,
         ],
-        "単位": ["円", "-", "kW", "日/年", "円/年", "円/年", "円", "-"]
+        "単位": ["円", "-", "円", "kW", "日/年", "円/年", "円/年", "円", "-"]
     })
 
     st.subheader("📌 計算により導出された入力値一覧")
@@ -227,6 +238,7 @@ def main():
     fee_list = [0.0]
     om_list = [0.0]
     decom_list = [0.0]
+    grid_fee_list = [grid_connection_fee]
     cf = [-capex]
     cum = [-capex]
 
@@ -261,6 +273,7 @@ def main():
         fee_list.append(fee_y)
         om_list.append(om_year)
         decom_list.append(decom_y)
+        grid_fee_list.append(0.0)
 
         cf.append(net)
         cum.append(cum[-1] + net)
@@ -287,6 +300,7 @@ def main():
         "Fee": fee_list,
         "OM": om_list,
         "Decommission": decom_list,
+        "GridConnectionFee": grid_fee_list,
         "CashFlow": cf,
         "CumulativeCashFlow": cum,
     })
@@ -326,3 +340,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    # CAPEX（税抜→税込）
+    capex_ex_tax = capex_equipment + capex_construction + grid_connection_fee
+    capex = capex_ex_tax * (1 + tax_rate)
+
