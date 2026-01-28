@@ -87,10 +87,6 @@ def price_decline(t: int, X: int, price1: float, Y: float) -> float:
     return price1 if t <= X else price1 * ((1 - Y) ** (t - X))
 
 
-def cap_price_decline(t: int, cap_price0: float, Z: float) -> float:
-    """Capacity market price declines by Z each year (compound). t=1 is the first year."""
-    return cap_price0 * ((1 - Z) ** (t - 1))
-
 # -----------------------------
 # Main app
 # -----------------------------
@@ -128,10 +124,9 @@ def main():
 
         st.divider()
         st.header("容量市場（収入）")
-        cap_price0 = st.number_input("容量市場単価（初年度）(円/kW)", value=0.0, min_value=0.0)
-        Z_pct = st.number_input("容量市場単価の低下率 Z（％/年）", value=0.0, min_value=0.0, max_value=100.0)
-        Z = Z_pct / 100.0
-
+        cap_start_year = int(st.number_input("容量市場収入の開始年 N（年目）", value=1, min_value=1))
+        cap_delta = st.number_input("容量市場単価 δ（円/kW）", value=0.0, min_value=0.0)
+        cap_epsilon = st.number_input("N年目の追加投資 ε（円）", value=0.0, min_value=0.0, step=1_000_000.0)
 
         st.divider()
         st.header("係数・率（％入力）")
@@ -240,6 +235,7 @@ def main():
     gross_list = [0.0]
     cap_price_list = [np.nan]
     cap_rev_list = [0.0]
+    add_invest_list = [0.0]
     ra_gross_list = [0.0]
     fee_list = [0.0]
     om_list = [0.0]
@@ -257,12 +253,14 @@ def main():
             p_t = price_decline(t, X, price, Y)
 
         ra_gross = p_t * base_revenue_coeff * a_t
-        cap_p_t = cap_price_decline(t, cap_price0, Z)
-        cap_gross = cap_p_t * power
+        # Capacity market: revenue starts from Nth year
+        cap_gross = (cap_delta * power) if (t >= cap_start_year) else 0.0
+        cap_p_t = cap_delta if (t >= cap_start_year) else 0.0
 
         gross = ra_gross + cap_gross  # 案A：容量市場収入も手数料対象
         fee_y = gross * fee
-        net = gross - fee_y - om_year
+        add_invest = cap_epsilon if (t == cap_start_year) else 0.0
+        net = gross - fee_y - om_year - add_invest
 
         decom_y = 0.0
         if t == years:
@@ -276,6 +274,7 @@ def main():
         ra_gross_list.append(ra_gross)
         cap_price_list.append(cap_p_t)
         cap_rev_list.append(cap_gross)
+        add_invest_list.append(add_invest)
         fee_list.append(fee_y)
         om_list.append(om_year)
         decom_list.append(decom_y)
@@ -303,6 +302,7 @@ def main():
         "RAGrossRevenue": ra_gross_list,
         "CapacityPrice": cap_price_list,
         "CapacityRevenue": cap_rev_list,
+        "AdditionalInvestment": add_invest_list,
         "Fee": fee_list,
         "OM": om_list,
         "Decommission": decom_list,
@@ -310,9 +310,7 @@ def main():
         "CashFlow": cf,
         "CumulativeCashFlow": cum,
     })
-    df_cf["CapacityRevenue"] = df_cf["CapacityPrice"] * power
-    df_cf["CapacityRevenue"] = df_cf["CapacityRevenue"].fillna(0.0)
-    df_cf["GrossRevenue"] = df_cf["RAGrossRevenue"] + df_cf["CapacityRevenue"]
+
 
     st.subheader("年次キャッシュフロー（年次）と累積キャッシュフロー")
     st.dataframe(df_cf, use_container_width=True)
